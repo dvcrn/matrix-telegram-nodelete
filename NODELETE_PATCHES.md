@@ -60,6 +60,7 @@ func (tc *Client) onDeleteMessages(ctx context.Context, ...) error {
             Type:      bridgev2.RemoteEventMessage,
             PortalKey: portalKey,
             Sender:    bridgev2.EventSender{},
+            Timestamp: time.Now(),
         },
         ID: noticeID,
         ConvertMessageFunc: func(

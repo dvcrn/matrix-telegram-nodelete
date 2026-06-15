@@ -826,6 +826,7 @@ func (tc *TelegramClient) onDeleteMessages(ctx context.Context, channelID int64,
 				Type:      bridgev2.RemoteEventMessage,
 				PortalKey: portalKey,
 				Sender:    bridgev2.EventSender{},
+				Timestamp: time.Now(),
 			},
 			ID: noticeID,
 			ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data any) (*bridgev2.ConvertedMessage, error) {
