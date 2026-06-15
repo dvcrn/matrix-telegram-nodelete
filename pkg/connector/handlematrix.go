@@ -766,8 +766,30 @@ func (tc *TelegramClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Ma
 }
 
 func (tc *TelegramClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
-	zerolog.Ctx(ctx).Info().Msg("Message deletion from Matrix side blocked, deletions are disabled.")
-	return nil
+	if msg.Portal.RoomType == database.RoomTypeSpace {
+		return fmt.Errorf("can't send messages to space portals")
+	} else if dbMsg, err := tc.main.Bridge.DB.Message.GetPartByMXID(ctx, msg.TargetMessage.MXID); err != nil {
+		return err
+	} else if _, messageID, err := ids.ParseMessageID(dbMsg.ID); err != nil {
+		return err
+	} else if peer, _, err := tc.inputPeerForPortalID(ctx, msg.Portal.ID); err != nil {
+		return err
+	} else if ch, ok := peer.(*tg.InputPeerChannel); ok {
+		_, err = tc.client.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  ch.ChannelID,
+				AccessHash: ch.AccessHash,
+			},
+			ID: []int{messageID},
+		})
+		return err
+	} else {
+		_, err = tc.client.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
+			Revoke: true,
+			ID:     []int{messageID},
+		})
+		return err
+	}
 }
 
 func (tc *TelegramClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {

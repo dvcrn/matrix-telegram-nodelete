@@ -1,20 +1,20 @@
 # Matrix Bridge No-Delete Patch Guide
 
-This document explains the modifications made to a mautrix bridge to disable message deletion propagation. When a message is deleted on the remote platform side, instead of deleting it in the Matrix room, the bridge posts a notice (as a reply to the original message) indicating that a deletion was attempted. Deletions initiated from the Matrix side are also blocked from propagating to the remote platform.
+This document explains the modifications made to a mautrix bridge to prevent message deletion propagation from the remote platform to Matrix. When a message is deleted on the remote platform side, instead of deleting it in the Matrix room, the bridge posts a notice (as a reply to the original message) indicating that a deletion was attempted.
+
+Deletions initiated from the Matrix side still work normally and propagate to the remote platform. Capabilities are left unchanged.
 
 This guide is written generically so the same pattern can be applied to any mautrix bridgev2-based bridge.
 
 ## Overview of Changes
 
-Three files are modified:
+Only one file is modified:
 
-1. **The remote-to-Matrix event handler** (e.g., `handletelegram.go`, `handlemeta.go`) - intercepts incoming delete events and converts them into notice messages
-2. **The Matrix-to-remote event handler** (e.g., `handlematrix.go`) - blocks outgoing delete/redaction requests
-3. **The capabilities declaration** (e.g., `capabilities.go`) - advertises that deletion is not supported
+- **The remote-to-Matrix event handler** (e.g., `handletelegram.go`, `handlemeta.go`) — intercepts incoming delete events and converts them into notice messages instead of propagating the deletion
 
 ## Detailed Changes
 
-### 1. Intercept Remote Delete Events (`handle<platform>.go`)
+### Intercept Remote Delete Events (`handle<platform>.go`)
 
 Find the function that handles incoming message deletion events from the remote platform. In a bridgev2 bridge, this typically queues a `simplevent.MessageRemove` event.
 
@@ -90,74 +90,13 @@ func (tc *Client) onDeleteMessages(ctx context.Context, ...) error {
 
 **Key points:**
 
-- The portal key resolution logic (looking up the message in the database, cache, etc.) stays unchanged - you still need to know which room the notice goes to.
+- The portal key resolution logic (looking up the message in the database, cache, etc.) stays unchanged — you still need to know which room the notice goes to.
 - `bridgev2.EventSender{}` (empty sender) means the message appears as coming from the bridge bot itself, not from any specific user.
 - `ReplyTo` makes the notice a reply to the original message, providing clear context about which message was targeted.
 - The `noticeID` must be unique per deletion attempt. Using a combination of the original message ID and current timestamp ensures uniqueness.
 - `event.MsgText` is used (not `event.MsgNotice`) so the message is visible in all Matrix clients without special settings.
-
-### 2. Block Matrix-to-Remote Deletions (`handlematrix.go`)
-
-Find the `HandleMatrixMessageRemove` method. This is called when a user redacts a message in Matrix and the bridge would normally propagate that deletion to the remote platform.
-
-**Before:**
-
-```go
-func (tc *Client) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
-    // ... look up message, call remote API to delete ...
-    return remoteAPI.DeleteMessage(messageID)
-}
-```
-
-**After:**
-
-```go
-func (tc *Client) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
-    zerolog.Ctx(ctx).Info().Msg("Message deletion from Matrix side blocked, deletions are disabled.")
-    return nil
-}
-```
-
-Returning `nil` means the bridge silently accepts the redaction event without propagating it. The message will still be redacted locally in the Matrix room (Matrix handles that), but it won't cause a deletion on the remote platform.
-
-### 3. Update Capabilities (`capabilities.go`)
-
-Find the `GetCapabilities` method that returns `*event.RoomFeatures`. Update the delete-related fields:
-
-**Before:**
-
-```go
-feat := &event.RoomFeatures{
-    // ...
-    Delete:     event.CapLevelFullySupported,
-    DeleteHide: true,
-    // ...
-}
-```
-
-**After:**
-
-```go
-feat := &event.RoomFeatures{
-    // ...
-    Delete:     event.CapLevelRejected,
-    DeleteHide: false,
-    // ...
-}
-```
-
-Also remove any per-chat-type delete capabilities:
-
-**Remove these lines** from the peer-type switch cases:
-
-```go
-feat.DeleteChat = true
-feat.DeleteChatForEveryone = true
-```
-
-If removing these lines leaves a variable unused (e.g., `portalMetadata` was only used for a participants count check in a delete-related conditional), remove that variable too to keep the build clean.
-
-**Update the capability version ID** if the bridge uses a date-based version string (e.g., `fi.mau.telegram.capabilities.2026_05_27`), so clients pick up the changed capabilities.
+- `Timestamp: time.Now()` must be set explicitly — without it, the event defaults to Go's zero time (year 1) and gets sorted incorrectly in Matrix room history.
+- No changes are needed to `HandleMatrixMessageRemove` or capabilities — deletions from the Matrix side should still propagate normally to the remote platform.
 
 ## Required Imports
 
@@ -202,12 +141,10 @@ After applying the changes:
 2. Run `go vet ./...` to check for unused variables or imports
 3. Start the bridge and test:
    - Delete a message on the remote platform side. Verify that in Matrix the original message stays and a reply appears saying "🚮 Message deletion attempted (ID: ...)"
-   - Redact a message in Matrix. Verify that the message is redacted locally in Matrix but the original message remains on the remote platform
+   - Delete/redact a message in Matrix. Verify it still propagates and deletes on the remote platform as normal.
 
 ## Maintenance Notes
 
 When rebasing on upstream bridge updates:
 - Check if the delete handler function signature changed
-- Check if new delete-related capabilities were added
-- Check if `HandleMatrixMessageRemove` signature changed
 - The `simplevent.Message` API is stable in bridgev2, so the notice pattern should continue to work across versions

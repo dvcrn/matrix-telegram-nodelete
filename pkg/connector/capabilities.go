@@ -218,8 +218,8 @@ func (tc *TelegramClient) GetCapabilities(ctx context.Context, portal *bridgev2.
 		LocationMessage:     event.CapLevelFullySupported,
 		Reply:               event.CapLevelFullySupported,
 		Edit:                event.CapLevelFullySupported,
-		Delete:              event.CapLevelRejected,
-		DeleteHide:          false,
+		Delete:              event.CapLevelFullySupported,
+		DeleteHide:          true,
 		Reaction:            event.CapLevelFullySupported,
 		ReactionCount:       1,
 		ReadReceipts:        true,
@@ -259,6 +259,7 @@ func (tc *TelegramClient) GetCapabilities(ctx context.Context, portal *bridgev2.
 		feat.File = premiumFileCaps
 		feat.ReactionCount = 3
 	}
+	portalMetadata := portal.Metadata.(*PortalMetadata)
 	peerType, _, topicID, _ := ids.ParsePortalID(portal.ID)
 	switch peerType {
 	case ids.PeerTypeChat:
@@ -269,6 +270,8 @@ func (tc *TelegramClient) GetCapabilities(ctx context.Context, portal *bridgev2.
 			event.MemberActionLeave:  event.CapLevelFullySupported,
 			// Note: unban and kick are not supported
 		}
+		// Minigroups can always be deleted
+		feat.DeleteChatForEveryone = true
 	case ids.PeerTypeChannel:
 		feat.ID += "channel"
 		feat.MemberActions = map[event.MemberAction]event.CapabilitySupportLevel{
@@ -277,8 +280,14 @@ func (tc *TelegramClient) GetCapabilities(ctx context.Context, portal *bridgev2.
 			event.MemberActionInvite: event.CapLevelFullySupported,
 			event.MemberActionLeave:  event.CapLevelFullySupported,
 		}
+		// Group creators can delete the chat for everyone, unless it's a large channel
+		if portalMetadata.ParticipantsCount < 1000 || topicID > 0 {
+			feat.DeleteChatForEveryone = true
+		}
 	case ids.PeerTypeUser:
 		baseID += "+dm"
+		feat.DeleteChat = true
+		feat.DeleteChatForEveryone = true
 		feat.State = event.StateFeatureMap{
 			event.StateBeeperDisappearingTimer.Type: {Level: event.CapLevelFullySupported},
 		}
