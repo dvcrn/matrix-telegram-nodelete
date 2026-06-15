@@ -814,13 +814,32 @@ func (tc *TelegramClient) onDeleteMessages(ctx context.Context, channelID int64,
 				Msg("Ignoring delete of unknown message")
 			continue
 		}
-		res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.MessageRemove{
+
+		zerolog.Ctx(ctx).Info().
+			Int("message_id", messageID).
+			Str("wrapped_message_id", string(wrappedMessageID)).
+			Msg("Intercepted message delete attempt, sending notice instead.")
+
+		noticeID := networkid.MessageID(fmt.Sprintf("delete_notice_%s_%d", wrappedMessageID, time.Now().UnixMilli()))
+		res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.Message[any]{
 			EventMeta: simplevent.EventMeta{
-				Type:      bridgev2.RemoteEventMessageRemove,
+				Type:      bridgev2.RemoteEventMessage,
 				PortalKey: portalKey,
+				Sender:    bridgev2.EventSender{},
 			},
-			TargetMessage:   wrappedMessageID,
-			HidePlaceholder: true,
+			ID: noticeID,
+			ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data any) (*bridgev2.ConvertedMessage, error) {
+				return &bridgev2.ConvertedMessage{
+					ReplyTo: &networkid.MessageOptionalPartID{MessageID: wrappedMessageID},
+					Parts: []*bridgev2.ConvertedMessagePart{{
+						Type: event.EventMessage,
+						Content: &event.MessageEventContent{
+							MsgType: event.MsgText,
+							Body:    fmt.Sprintf("🚮 Message deletion attempted (ID: %s)", wrappedMessageID),
+						},
+					}},
+				}, nil
+			},
 		})
 		if err := resultToError(res); err != nil {
 			return err
